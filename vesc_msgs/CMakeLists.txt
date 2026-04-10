@@ -1,22 +1,20 @@
-cmake_minimum_required(VERSION 2.8.3)
+cmake_minimum_required(VERSION 3.8)
 project(vesc_msgs)
 
-find_package(catkin REQUIRED COMPONENTS
-  std_msgs
-  message_generation
+if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  add_compile_options(-Wall -Wextra -Wpedantic)
+endif()
+
+find_package(ament_cmake REQUIRED)
+find_package(rosidl_default_generators REQUIRED)
+find_package(std_msgs REQUIRED)
+
+rosidl_generate_interfaces(${PROJECT_NAME}
+  "msg/VescState.msg"
+  "msg/VescStateStamped.msg"
+  DEPENDENCIES std_msgs
 )
 
-add_message_files(
-  DIRECTORY msg
-  FILES
-  VescState.msg
-  VescStateStamped.msg
-)
-generate_messages(
-  DEPENDENCIES
-  std_msgs
-)
+ament_export_dependencies(rosidl_default_runtime)
 
-catkin_package(
-  CATKIN_DEPENDS std_msgs message_runtime
-)
+ament_package()

@@ -1,76 +1,79 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 # import some utils.
-import rospy
+import rclpy
+from rclpy.node import Node
 from std_msgs.msg import Float64
 
 
-class InterpolateThrottle:
+class InterpolateThrottle(Node):
     def __init__(self):
-        car_name = rospy.get_param("~car_name", "/car")
+        super().__init__('throttle_interpolator')
+
+        car_name = self.declare_parameter('car_name', 'car').value
 
         # Allow our topics to be dynamic.
-        self.rpm_input_topic = rospy.get_param(
-            "~rpm_input_topic",
-            "{}/vesc/commands/motor/unsmoothed_speed".format(car_name),
-        )
-        self.rpm_output_topic = rospy.get_param(
-            "~rpm_output_topic", "{}/vesc/commands/motor/speed".format(car_name)
-        )
+        self.rpm_input_topic = self.declare_parameter(
+            "rpm_input_topic",
+            f"{car_name}/vesc/commands/motor/unsmoothed_speed",
+        ).value
+        self.rpm_output_topic = self.declare_parameter(
+            "rpm_output_topic", f"{car_name}/vesc/commands/motor/speed"
+        ).value
 
-        self.servo_input_topic = rospy.get_param(
-            "~servo_input_topic",
-            "{}/vesc/commands/servo/unsmoothed_position".format(car_name),
-        )
-        self.servo_output_topic = rospy.get_param(
-            "~servo_output_topic", "{}/vesc/commands/servo/position".format(car_name)
-        )
+        self.servo_input_topic = self.declare_parameter(
+            "servo_input_topic",
+            f"{car_name}/vesc/commands/servo/unsmoothed_position",
+        ).value
+        self.servo_output_topic = self.declare_parameter(
+            "~servo_output_topic", f"{car_name}/vesc/commands/servo/position"
+        ).value
 
-        self.max_acceleration = rospy.get_param(rospy.search_param("max_acceleration"))
-        self.max_rpm = rospy.get_param(rospy.search_param("vesc_driver/speed_max"))
-        self.min_rpm = rospy.get_param(rospy.search_param("vesc_driver/speed_min"))
-        self.throttle_smoother_rate = rospy.get_param(
-            rospy.search_param("throttle_smoother_rate")
-        )
-        self.speed_to_erpm_gain = rospy.get_param(
-            rospy.search_param("speed_to_erpm_gain")
-        )
+        self.max_acceleration = self.declare_parameter("max_acceleration", 0.0).value
+        self.max_rpm = self.declare_parameter("vesc_driver.speed_max", 0.0).value
+        self.min_rpm = self.declare_parameter("vesc_driver.speed_min", 0.0).value
+        self.throttle_smoother_rate = self.declare_parameter(
+            "throttle_smoother_rate", 0.0
+        ).value
+        self.speed_to_erpm_gain = self.declare_parameter(
+            "speed_to_erpm_gain", 0.0
+        ).value
 
-        self.max_servo_speed = rospy.get_param(rospy.search_param("max_servo_speed"))
-        self.steering_angle_to_servo_gain = rospy.get_param(
-            rospy.search_param("steering_angle_to_servo_gain")
-        )
-        self.servo_smoother_rate = rospy.get_param(
-            rospy.search_param("servo_smoother_rate")
-        )
-        self.max_servo = rospy.get_param(rospy.search_param("vesc_driver/servo_max"))
-        self.min_servo = rospy.get_param(rospy.search_param("vesc_driver/servo_min"))
+        self.max_servo_speed = self.declare_parameter("max_servo_speed", 0.0).value
+        self.steering_angle_to_servo_gain = self.declare_parameter(
+            "steering_angle_to_servo_gain", 0.0
+        ).value
+        self.servo_smoother_rate = self.declare_parameter(
+            "servo_smoother_rate", 0.0
+        ).value
+        self.max_servo = self.declare_parameter("vesc_driver.servo_max", 0.0).value
+        self.min_servo = self.declare_parameter("vesc_driver.servo_min", 0.0).value
 
         # Variables
         self.last_rpm = 0
         self.desired_rpm = self.last_rpm
 
-        self.last_servo = rospy.get_param(
-            rospy.search_param("steering_angle_to_servo_offset")
-        )
+        self.last_servo = self.declare_parameter(
+            "steering_angle_to_servo_offset", 0.0
+        ).value
         self.desired_servo_position = self.last_servo
 
         # Create topic subscribers and publishers
-        self.rpm_output = rospy.Publisher(self.rpm_output_topic, Float64, queue_size=1)
-        self.servo_output = rospy.Publisher(
-            self.servo_output_topic, Float64, queue_size=1
+        self.rpm_output = self.create_publisher(Float64, self.rpm_output_topic, 1)
+        self.servo_output = self.create_publisher(
+            Float64, self.servo_output_topic, 1
         )
 
-        rospy.Subscriber(self.rpm_input_topic, Float64, self._process_throttle_command)
-        rospy.Subscriber(self.servo_input_topic, Float64, self._process_servo_command)
+        self.create_subscription(Float64, self.rpm_input_topic, self._process_throttle_command, 10)
+        self.create_subscription(Float64, self.servo_input_topic, self._process_servo_command, 10)
 
         self.max_delta_servo = abs(
             self.steering_angle_to_servo_gain
             * self.max_servo_speed
             / self.servo_smoother_rate
         )
-        rospy.Timer(
-            rospy.Duration(1.0 / self.servo_smoother_rate), self._publish_servo_command
+        self.create_timer(
+            1.0 / self.servo_smoother_rate, self._publish_servo_command
         )
 
         self.max_delta_rpm = abs(
@@ -78,25 +81,17 @@ class InterpolateThrottle:
             * self.max_acceleration
             / self.throttle_smoother_rate
         )
-        rospy.Timer(
-            rospy.Duration(1.0 / self.max_delta_rpm), self._publish_throttle_command
+        self.create_timer(
+            1.0 / self.throttle_smoother_rate, self._publish_throttle_command
         )
 
-        # run the node
-        self._run()
-
-        # Keep the node alive
-
-    def _run(self):
-        rospy.spin()
-
-    def _publish_throttle_command(self, evt):
+    def _publish_throttle_command(self):
         desired_delta = self.desired_rpm - self.last_rpm
         clipped_delta = max(min(desired_delta, self.max_delta_rpm), -self.max_delta_rpm)
         smoothed_rpm = self.last_rpm + clipped_delta
         self.last_rpm = smoothed_rpm
         # print self.desired_rpm, smoothed_rpm
-        self.rpm_output.publish(Float64(smoothed_rpm))
+        self.rpm_output.publish(Float64(data=smoothed_rpm))
 
     def _process_throttle_command(self, msg):
         input_rpm = msg.data
@@ -104,14 +99,14 @@ class InterpolateThrottle:
         input_rpm = min(max(input_rpm, self.min_rpm), self.max_rpm)
         self.desired_rpm = input_rpm
 
-    def _publish_servo_command(self, evt):
+    def _publish_servo_command(self):
         desired_delta = self.desired_servo_position - self.last_servo
         clipped_delta = max(
             min(desired_delta, self.max_delta_servo), -self.max_delta_servo
         )
         smoothed_servo = self.last_servo + clipped_delta
         self.last_servo = smoothed_servo
-        self.servo_output.publish(Float64(smoothed_servo))
+        self.servo_output.publish(Float64(data=smoothed_servo))
 
     def _process_servo_command(self, msg):
         input_servo = msg.data
@@ -122,9 +117,12 @@ class InterpolateThrottle:
 
 
 # Boilerplate node spin up.
+def main(args=None):
+    rclpy.init(args=args)
+    node = InterpolateThrottle()
+    rclpy.spin(node)
+    rclpy.shutdown()
+
+
 if __name__ == "__main__":
-    try:
-        rospy.init_node("Throttle_Interpolator")
-        p = InterpolateThrottle()
-    except rospy.ROSInterruptException:
-        pass
+    main()
