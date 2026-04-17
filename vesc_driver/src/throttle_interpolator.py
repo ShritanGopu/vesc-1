@@ -1,128 +1,127 @@
 #!/usr/bin/env python3
 
-# import some utils.
+# MIT License
+
+# Copyright (c) 2020 Hongrui Zheng
+
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Float64
 
+from std_msgs.msg import Float64
 
 class InterpolateThrottle(Node):
     def __init__(self):
         super().__init__('throttle_interpolator')
 
-        car_name = self.declare_parameter('car_name', 'car').value
+        self.declare_parameter('rpm_input_topic', 'commands/motor/unsmoothed_speed')
+        self.declare_parameter('rpm_output_topic', 'commands/motor/speed')
+        self.declare_parameter('servo_input_topic', 'commands/servo/unsmoothed_position')
+        self.declare_parameter('servo_output_topic', 'commands/servo/position')
+        self.declare_parameter('max_acceleration', 2.5)
+        self.declare_parameter('speed_max', 30500)
+        self.declare_parameter('speed_min', -30500)
+        self.declare_parameter('throttle_smoother_rate', 75.0)
+        self.declare_parameter('speed_to_erpm_gain', 4614.0)
+        self.declare_parameter('max_servo_speed', 3.2)
+        self.declare_parameter('steering_angle_to_servo_gain', -1.2135)
+        self.declare_parameter('servo_smoother_rate', 75.0)
+        self.declare_parameter('servo_max', 0.85)
+        self.declare_parameter('servo_min', -0.85)
+        self.declare_parameter('steering_angle_to_servo_offset', 0.5304)
 
-        # Allow our topics to be dynamic.
-        self.rpm_input_topic = self.declare_parameter(
-            "rpm_input_topic",
-            f"{car_name}/vesc/commands/motor/unsmoothed_speed",
-        ).value
-        self.rpm_output_topic = self.declare_parameter(
-            "rpm_output_topic", f"{car_name}/vesc/commands/motor/speed"
-        ).value
+        self.rpm_input_topic = self.get_parameter('rpm_input_topic').value
+        self.rpm_output_topic = self.get_parameter('rpm_output_topic').value
+        self.servo_input_topic = self.get_parameter('servo_input_topic').value
+        self.servo_output_topic = self.get_parameter('servo_output_topic').value
+        self.max_acceleration = self.get_parameter('max_acceleration').value
+        self.max_rpm = self.get_parameter('speed_max').value
+        self.min_rpm = self.get_parameter('speed_min').value
+        self.throttle_smoother_rate = self.get_parameter('throttle_smoother_rate').value
+        self.speed_to_erpm_gain = self.get_parameter('speed_to_erpm_gain').value
+        self.max_servo_speed = self.get_parameter('max_servo_speed').value
+        self.steering_angle_to_servo_gain = self.get_parameter('steering_angle_to_servo_gain').value
+        self.servo_smoother_rate = self.get_parameter('servo_smoother_rate').value
+        self.max_servo = self.get_parameter('servo_max').value
+        self.min_servo = self.get_parameter('servo_min').value
+        self.last_servo = self.get_parameter('steering_angle_to_servo_offset').value
 
-        self.servo_input_topic = self.declare_parameter(
-            "servo_input_topic",
-            f"{car_name}/vesc/commands/servo/unsmoothed_position",
-        ).value
-        self.servo_output_topic = self.declare_parameter(
-            "~servo_output_topic", f"{car_name}/vesc/commands/servo/position"
-        ).value
-
-        self.max_acceleration = self.declare_parameter("max_acceleration", 0.0).value
-        self.max_rpm = self.declare_parameter("vesc_driver.speed_max", 0.0).value
-        self.min_rpm = self.declare_parameter("vesc_driver.speed_min", 0.0).value
-        self.throttle_smoother_rate = self.declare_parameter(
-            "throttle_smoother_rate", 0.0
-        ).value
-        self.speed_to_erpm_gain = self.declare_parameter(
-            "speed_to_erpm_gain", 0.0
-        ).value
-
-        self.max_servo_speed = self.declare_parameter("max_servo_speed", 0.0).value
-        self.steering_angle_to_servo_gain = self.declare_parameter(
-            "steering_angle_to_servo_gain", 0.0
-        ).value
-        self.servo_smoother_rate = self.declare_parameter(
-            "servo_smoother_rate", 0.0
-        ).value
-        self.max_servo = self.declare_parameter("vesc_driver.servo_max", 0.0).value
-        self.min_servo = self.declare_parameter("vesc_driver.servo_min", 0.0).value
-
-        # Variables
         self.last_rpm = 0
         self.desired_rpm = self.last_rpm
-
-        self.last_servo = self.declare_parameter(
-            "steering_angle_to_servo_offset", 0.0
-        ).value
         self.desired_servo_position = self.last_servo
 
-        # Create topic subscribers and publishers
         self.rpm_output = self.create_publisher(Float64, self.rpm_output_topic, 1)
-        self.servo_output = self.create_publisher(
-            Float64, self.servo_output_topic, 1
-        )
+        self.servo_output = self.create_publisher(Float64, self.servo_output_topic, 1)
 
-        self.create_subscription(Float64, self.rpm_input_topic, self._process_throttle_command, 10)
-        self.create_subscription(Float64, self.servo_input_topic, self._process_servo_command, 10)
+        self.rpm_sub = self.create_subscription(
+            Float64,
+            self.rpm_input_topic,
+            self._process_throttle_command,
+            1)
+        self.servo_sub = self.create_subscription(
+            Float64,
+            self.servo_input_topic,
+            self._process_servo_command,
+            1)
 
-        self.max_delta_servo = abs(
-            self.steering_angle_to_servo_gain
-            * self.max_servo_speed
-            / self.servo_smoother_rate
-        )
-        self.create_timer(
-            1.0 / self.servo_smoother_rate, self._publish_servo_command
-        )
+        self.max_delta_servo = abs(self.steering_angle_to_servo_gain * self.max_servo_speed / self.servo_smoother_rate)
+        self.servo_timer = self.create_timer(1.0/self.servo_smoother_rate, self._publish_servo_command)
 
-        self.max_delta_rpm = abs(
-            self.speed_to_erpm_gain
-            * self.max_acceleration
-            / self.throttle_smoother_rate
-        )
-        self.create_timer(
-            1.0 / self.throttle_smoother_rate, self._publish_throttle_command
-        )
+        self.max_delta_rpm = abs(self.speed_to_erpm_gain * self.max_acceleration / self.throttle_smoother_rate)
+        self.rmp_timer = self.create_timer(1.0/self.throttle_smoother_rate, self._publish_throttle_command)
 
     def _publish_throttle_command(self):
-        desired_delta = self.desired_rpm - self.last_rpm
+        desired_delta = self.desired_rpm-self.last_rpm
         clipped_delta = max(min(desired_delta, self.max_delta_rpm), -self.max_delta_rpm)
         smoothed_rpm = self.last_rpm + clipped_delta
         self.last_rpm = smoothed_rpm
-        # print self.desired_rpm, smoothed_rpm
-        self.rpm_output.publish(Float64(data=smoothed_rpm))
-
-    def _process_throttle_command(self, msg):
+        rpm_msg = Float64()
+        rpm_msg.data = float(smoothed_rpm * 1.0) 
+        self.rpm_output.publish(rpm_msg)
+            
+    def _process_throttle_command(self,msg):
         input_rpm = msg.data
         # Do some sanity clipping
         input_rpm = min(max(input_rpm, self.min_rpm), self.max_rpm)
         self.desired_rpm = input_rpm
 
     def _publish_servo_command(self):
-        desired_delta = self.desired_servo_position - self.last_servo
-        clipped_delta = max(
-            min(desired_delta, self.max_delta_servo), -self.max_delta_servo
-        )
+        desired_delta = self.desired_servo_position-self.last_servo
+        clipped_delta = max(min(desired_delta, self.max_delta_servo), -self.max_delta_servo)
         smoothed_servo = self.last_servo + clipped_delta
         self.last_servo = smoothed_servo
-        self.servo_output.publish(Float64(data=smoothed_servo))
+        servo_msg = Float64()
+        servo_msg.data = float(smoothed_servo)
+        self.servo_output.publish(servo_msg)
 
-    def _process_servo_command(self, msg):
+    def _process_servo_command(self,msg):
         input_servo = msg.data
         # Do some sanity clipping
         input_servo = min(max(input_servo, self.min_servo), self.max_servo)
         # set the target servo position
         self.desired_servo_position = input_servo
 
-
-# Boilerplate node spin up.
 def main(args=None):
     rclpy.init(args=args)
-    node = InterpolateThrottle()
-    rclpy.spin(node)
-    rclpy.shutdown()
+    p = InterpolateThrottle()
+    rclpy.spin(p)
 
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

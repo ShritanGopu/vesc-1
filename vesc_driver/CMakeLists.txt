@@ -70,3 +70,5 @@ install(PROGRAMS
   src/throttle_interpolator.py
   DESTINATION lib/${PROJECT_NAME}
 )
+
+ament_package()
