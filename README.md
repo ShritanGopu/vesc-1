@@ -24,4 +24,4 @@ Topic | Type | Description
 #### Subscribers
 Topic | Type | Description
 ------|------|------------
-/mux/ackermann_cmd_mux/output | [ackermann_msgs/AckermannDriveStamped](http://docs.ros.org/api/ackermann_msgs/html/msg/AckermannDriveStamped.html) | Output from mux to be converted to direct controls
+/mux/output | [ackermann_msgs/AckermannDriveStamped](http://docs.ros.org/api/ackermann_msgs/html/msg/AckermannDriveStamped.html) | Output from mux to be converted to direct controls
